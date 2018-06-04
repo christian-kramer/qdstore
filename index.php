@@ -2,43 +2,37 @@
 
 error_reporting(E_ALL); ini_set('display_errors', 1);
 
+define('ALPHABET', range('a', 'e'));
+
+
 $actions = Array(
-    'init' => function ($path)
-    {
-        if (!file_exists("$path"))
-        {
-            foreach(range('a','e') as $identity)
-            {
-                mkdir("$path/$identity", 0755, true);
-                /* file_put_contents("$path/$identity/data.php", '<?php include("../../data.php") ?>');*/
-                file_put_contents("$path/$identity/index.php", '<?php include("../../shard.php") ?>');
-            }
-            
-            file_put_contents("$path/.gitignore", "*\n");
-        }
-    },
     'group' => function ($args)
-    {    
-        $storage = new ShardDrive(shards());
-        return $storage->group();
+    {
+        $primary = ALPHABET[rand(0, count(ALPHABET) - 1)];
+        journal("selected $primary as primary");
+        return file_get_contents(storage($primary) . "/identify/?group");
     },
     'create' => function ($args)
     {
         
         if (!($_SERVER['REQUEST_METHOD'] === 'POST' && $_SERVER['CONTENT_TYPE'] === 'application/json'))
         {
-            return error(true, 'Unsupported Method or Content');
+            return error(true, 'unsupported method or content type');
         }
 
         
         $namespace = $args[0];
         $block = $args[1];
-
         $data = file_get_contents("php://input");
+        
+        if (strlen($block) < 2 || !ctype_alpha($block))
+        {
+            return error(true, "invalid block");
+        }
 
-        file_get_contents("http://storage.qdl.ink/shards/$shard/?permitted");
+        $secondary = $block[1];
 
-        file_post_contents("http://storage.qdl.ink/shards/$shard/");
+        return post_raw(storage($secondary) . "/create/?$namespace&$block", $data);
 
     },
     'read' => function ($args)
@@ -52,7 +46,6 @@ $actions = Array(
 );
 
 
-
 /* Handle Requested Method */
 route(explode('/', $_SERVER['SCRIPT_NAME']), $actions);
 
@@ -62,22 +55,16 @@ route(explode('/', $_SERVER['SCRIPT_NAME']), $actions);
 /* Bootstrap Environment if Necessary */
 build(".", $actions);
 
+/* Initialize Shards (only relevant when shards are subdirectories) */
+init("shards");
+
 /* serve homepage */
 route(['default'], ['default' => []]);
 
-exit;
 
-$method = array_shift($args);
 
-if (!file_exists("shards"))
-{
-    $actions['init']('shards');
-}
 
-if (isset($actions[$method]) && is_callable($actions[$method]))
-{
-    echo $actions[$method]($args);
-}
+
 
 
 function build($path, $actions)
@@ -95,7 +82,27 @@ function build($path, $actions)
             }
 
             file_put_contents("$path/$name/index.php", $include);
+            file_put_contents("$path/$name/.gitignore", "*\n");
         }
+    }
+}
+
+
+function init($path)
+{
+    if (!file_exists("$path"))
+    {
+        foreach(ALPHABET as $identity)
+        {
+            mkdir("$path/$identity", 0755, true);
+            /* file_put_contents("$path/$identity/data.php", '<?php include("../../data.php") ?>');*/
+            if (file_put_contents("$path/$identity/index.php", '<?php define("PEERS", ""); include $_SERVER["DOCUMENT_ROOT"] . "/shard.php" ?>'))
+            {
+                file_get_contents("http://" . $_SERVER['HTTP_HOST'] . "/$path/$identity");
+            }
+        }
+        
+        file_put_contents("$path/.gitignore", "*\n");
     }
 }
 
@@ -144,6 +151,26 @@ function route($request, $actions)
             route($request, $actions);
         }
     }
+}
+
+function storage($shard)
+{
+    return "http://" . $_SERVER['HTTP_HOST'] . "/shards/$shard";
+}
+
+function post_raw($url, $data)
+{
+    $opts = array('http' =>
+        array(
+            'method'  => 'POST',
+            'header'  => 'Content-type: application/json',
+            'content' => $data
+        )
+    );
+    
+    $context  = stream_context_create($opts);
+    
+    return file_get_contents($url, false, $context);
 }
 
 function journal($msg)
