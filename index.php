@@ -1,6 +1,6 @@
 <?php
 
-error_reporting(E_ALL); ini_set('display_errors', 1);
+//error_reporting(E_ALL); ini_set('display_errors', 1);
 
 define('ALPHABET', range('a', 'e'));
 
@@ -14,7 +14,6 @@ $actions = Array(
     },
     'create' => function ($args)
     {
-        
         if (!($_SERVER['REQUEST_METHOD'] === 'POST' && $_SERVER['CONTENT_TYPE'] === 'application/json'))
         {
             return error(true, 'unsupported method or content type');
@@ -25,7 +24,7 @@ $actions = Array(
         $block = $args[1];
         $data = file_get_contents("php://input");
         
-        if (strlen($block) < 2 || !ctype_alpha($block))
+        if (strlen($block) < 2 || !ctype_alpha($block) || $block[0] === $block[1])
         {
             return error(true, "invalid block");
         }
@@ -37,11 +36,48 @@ $actions = Array(
     },
     'read' => function ($args)
     {   /* Retrieve Data property of specified file, and increment read counter */
+        $namespace = $args[0];
+        $block = $args[1];
+
+        if (strlen($block) < 2 || !ctype_alpha($block))
+        {
+            return error(true, "invalid block");
+        }
+
+        $primary = $block[0];
+        $secondary = $block[1];
+
+
+        $storage = json_decode(file_get_contents(storage($primary) . "/read/?$namespace&$block"), true);
+        if (!$storage || (isset($storage['status']) && $storage['status'] === 'ERROR'))
+        {
+            $storage = json_decode(file_get_contents(storage($secondary) . "/read/?$namespace&$block"), true);
+            if (!$storage)
+            {
+                return error(true, "could not reach servers");
+            }
+            if (isset($storage['status']) && $storage['status'] === 'ERROR')
+            {
+                return error(true, "link could not be found");
+            }
+        }
+        return json_encode($storage);
 
     },
     'props' => function ($args)
     {   /* Retrieve all other properties of specified file, without incrementing read counter */
+        $namespace = $args[0];
+        $block = $args[1];
 
+        if (strlen($block) < 2 || !ctype_alpha($block))
+        {
+            return error(true, "invalid block");
+        }
+
+        $primary = $block[0];
+        $secondary = $block[1];
+
+        return file_get_contents(storage($primary) . "/props/?$namespace&$block");
     }
 );
 
