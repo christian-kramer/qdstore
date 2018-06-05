@@ -63,6 +63,10 @@ $actions = Array(
                 {
                     $error = $result['response'];
                 }
+                else
+                {
+                    file_put_contents("$path/$block", $data);
+                }
             }
             else
             {
@@ -101,28 +105,76 @@ $actions = Array(
                 journal("primary is $block[0], storage is " . storage($block[0]) . "/create/?$namespace&$block$suffix");
                 
                 $result = json_decode(post_raw(storage($block[0]) . "/create/?$namespace&$block$suffix", $data), true);
-                journal("result is " . $result['status']);
+                journal("result status is " . $result['status']);
                 
                 if (!$result || $result['status'] === 'ERROR')
                 {
-                    $error = $result['response'];
+                    return error(true, $result['response']);
                 }
                 else
                 {
                     $block .= $suffix;
                     file_put_contents("$path/$block", $data);
                     file_put_contents("$path/counter", $counter);
+                    return error(false, $block);
                 }
             }
         }
     },
     'read' => function ($args)
     {   /* Retrieve Data property of specified file, and increment read counter */
+        $namespace = $args[0];
+        $block = $args[1];
+        $subdir = substr($block, 0, 2);
+        $file = json_decode(file_get_contents("../data/$namespace/$subdir/$block"));
+        if ($file)
+        {
+            if (!isset($file->reads))
+            {
+                $file->reads = 0;
+            }
+            $file->reads++;
+            file_put_contents("../data/$namespace/$subdir/$block", json_encode($file));
+            return json_encode($file->data);
+        }
+
+        return error(true, 'error retrieving file');
+
 
     },
     'props' => function ($args)
     {   /* Retrieve all other properties of specified file, without incrementing read counter */
+        $namespace = $args[0];
+        $block = $args[1];
+        $primary = identity() === $block[0];
+        $subdir = substr($block, 0, 2);
+        $file = json_decode(file_get_contents("../data/$namespace/$subdir/$block"), true);
+        if ($file)
+        {
+            unset($file['data']);
+            
+            if ($primary)
+            {
+                $replica = json_decode(file_get_contents(storage($block[1]) . "/props/?$namespace&$block"), true);
+                if ($replica)
+                {
+                    unset($replica['data']);
 
+                    foreach ($replica as $key => $value)
+                    {
+                        if (is_numeric($value))
+                        {
+                            $file[$key] += $value;
+                        }
+                    }
+                }
+            }
+
+
+            return json_encode($file);
+        }
+
+        return error(true, 'error retrieving file');
     }
 );
 
