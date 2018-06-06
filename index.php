@@ -34,7 +34,7 @@ $actions = Array(
 
     },
     'update' => function ($args)
-    {
+    {   /* Write file->data */
         if (!($_SERVER['REQUEST_METHOD'] === 'POST' && $_SERVER['CONTENT_TYPE'] === 'application/json'))
         {
             return error(true, 'unsupported method or content type');
@@ -53,11 +53,12 @@ $actions = Array(
             return error(true, "invalid block");
         }
 
-
-        return post_raw(storage($secondary) . "/update/?$namespace&$block", $data);
+        $result = post_raw(storage($secondary) . "/update/?$namespace&$block", $data);
+        journal("this is what we return to qdlink: " . $result);
+        return $result;
     },
     'read' => function ($args)
-    {   /* Retrieve Data property of specified file, and increment read counter */
+    {   /* Retrieve file->data */
         $namespace = $args[0];
         $block = $args[1];
 
@@ -225,10 +226,12 @@ function post_raw($url, $data)
             'content' => $data
         )
     );
-    
+    journal("posting raw $data to $url");
     $context  = stream_context_create($opts);
-    
-    return file_get_contents($url, false, $context);
+
+    $return = file_get_contents($url, false, $context);
+    journal("recieved $return from $url");
+    return $return;
 }
 
 function journal($msg)
