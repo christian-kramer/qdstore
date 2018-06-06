@@ -1,6 +1,6 @@
 <?php
 
-error_reporting(E_ALL); ini_set('display_errors', 1);
+//error_reporting(E_ALL); ini_set('display_errors', 1);
 
 define('ALPHABET', range('a', 'e'));
 
@@ -162,16 +162,24 @@ $actions = Array(
 
                 foreach($newdata->data as $key => $value)
                 {
-                    $file->data->$key = array_merge($file->data->$key, $newdata->data->$key);
+                    if (isset($file->data->$key) && is_array($file->data->$key))
+                    {
+                        $file->data->$key = array_merge($file->data->$key, $newdata->data->$key);
+                    }
+                    else
+                    {
+                        $file->data->$key = $value;
+                    }
                 }
 
 
-                if (!isset($file->reads))
+                if (!isset($file->writes))
                 {
-                    $file->reads = 0;
+                    $file->writes = 0;
                 }
-                $file->reads++;
+                $file->writes++;
                 file_put_contents("../data/$namespace/$subdir/$block", json_encode($file));
+                journal("this is what we return to qdstore: " . json_encode($file->data));
                 return json_encode($file->data);
             }
         }
@@ -193,12 +201,13 @@ $actions = Array(
             }
 
 
-            if (!isset($file->reads))
+            if (!isset($file->writes))
             {
-                $file->reads = 0;
+                $file->writes = 0;
             }
-            $file->reads++;
+            $file->writes++;
             file_put_contents("../data/$namespace/$subdir/$block", json_encode($file));
+            journal("this is what we return to secondary: " . json_encode($file->data));
             return json_encode($file->data);
         }
         
