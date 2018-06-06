@@ -93,6 +93,7 @@ $actions = Array(
         /* handle assigned blocks */
 
         $counter = file_exists("$path/counter") ? file_get_contents("$path/counter") : 0;
+        journal("counter is at $path/counter");
 
         while (strlen($block) === 2)
         {
@@ -119,6 +120,95 @@ $actions = Array(
                     return error(false, $block);
                 }
             }
+        }
+    },
+    'update' => function ($args)
+    {
+
+        if (!($_SERVER['REQUEST_METHOD'] === 'POST' && $_SERVER['CONTENT_TYPE'] === 'application/json'))
+        {
+            return error(true, 'unsupported method or content type');
+        }
+
+        
+        $namespace = $args[0];
+        $block = $args[1];
+        $data = file_get_contents("php://input");
+        $subdir = substr($block, 0, 2);
+        $path = "../data/$namespace/$subdir";
+        $newdata = json_decode(file_get_contents("php://input"));
+        $file = json_decode(file_get_contents("../data/$namespace/$subdir/$block"));
+
+        while (!file_exists($path))
+        {
+            mkdir($path, 0755, true);
+        }
+
+        $primary = identity() === $block[0];
+
+        $error = '';
+        /* handle primary or custom blocks */
+        if (!$primary)
+        {
+            $result = json_decode(post_raw(storage($block[0]) . "/update/?$namespace&$block", $data), true);
+            if (!$result || $result['status'] === 'ERROR')
+            {
+                $error = $result['response'];
+            }
+            else
+            {
+                journal("data with which to overwrite: " . json_encode($newdata));
+                journal("data to overwrite: " . json_encode($file));
+
+                foreach($newdata->data as $key => $value)
+                {
+                    $file->data->$key = array_merge($file->data->$key, $newdata->data->$key);
+                }
+
+
+                if (!isset($file->reads))
+                {
+                    $file->reads = 0;
+                }
+                $file->reads++;
+                file_put_contents("../data/$namespace/$subdir/$block", json_encode($file));
+                return json_encode($file->data);
+            }
+        }
+        else
+        {
+            journal("data with which to overwrite: " . json_encode($newdata));
+            journal("data to overwrite: " . json_encode($file));
+
+            foreach($newdata->data as $key => $value)
+            {
+                if (isset($file->data->$key) && is_array($file->data->$key))
+                {
+                    $file->data->$key = array_merge($file->data->$key, $newdata->data->$key);
+                }
+                else
+                {
+                    $file->data->$key = $value;
+                }
+            }
+
+
+            if (!isset($file->reads))
+            {
+                $file->reads = 0;
+            }
+            $file->reads++;
+            file_put_contents("../data/$namespace/$subdir/$block", json_encode($file));
+            return json_encode($file->data);
+        }
+        
+        if ($error)
+        {
+            return error(true, $error);
+        }
+        else
+        {
+            return error(false, $block);
         }
     },
     'read' => function ($args)
@@ -151,14 +241,14 @@ $actions = Array(
         $file = json_decode(file_get_contents("../data/$namespace/$subdir/$block"), true);
         if ($file)
         {
-            unset($file['data']);
+            //unset($file['data']);
             
             if ($primary)
             {
                 $replica = json_decode(file_get_contents(storage($block[1]) . "/props/?$namespace&$block"), true);
                 if ($replica)
                 {
-                    unset($replica['data']);
+                    //unset($replica['data']);
 
                     foreach ($replica as $key => $value)
                     {

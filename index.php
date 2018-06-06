@@ -19,12 +19,11 @@ $actions = Array(
             return error(true, 'unsupported method or content type');
         }
 
-        
         $namespace = $args[0];
         $block = $args[1];
         $data = file_get_contents("php://input");
         
-        if (strlen($block) < 2 || !ctype_alpha($block) || $block[0] === $block[1])
+        if (strlen($block) < 2 || !ctype_alnum($block) || $block[0] === $block[1])
         {
             return error(true, "invalid block");
         }
@@ -34,12 +33,35 @@ $actions = Array(
         return post_raw(storage($secondary) . "/create/?$namespace&$block", $data);
 
     },
+    'update' => function ($args)
+    {
+        if (!($_SERVER['REQUEST_METHOD'] === 'POST' && $_SERVER['CONTENT_TYPE'] === 'application/json'))
+        {
+            return error(true, 'unsupported method or content type');
+        }
+
+        $namespace = $args[0];
+        $block = $args[1];
+        $data = file_get_contents("php://input");
+        $secondary = $block[1];
+
+        journal("sending data " . $data);
+        journal("to " . storage($secondary) . "/update/?$namespace&$block");
+        
+        if (strlen($block) < 2 || !ctype_alnum($block) || $block[0] === $block[1])
+        {
+            return error(true, "invalid block");
+        }
+
+
+        return post_raw(storage($secondary) . "/update/?$namespace&$block", $data);
+    },
     'read' => function ($args)
     {   /* Retrieve Data property of specified file, and increment read counter */
         $namespace = $args[0];
         $block = $args[1];
 
-        if (strlen($block) < 2 || !ctype_alpha($block))
+        if (strlen($block) < 2 || !ctype_alnum($block))
         {
             return error(true, "invalid block");
         }
@@ -69,7 +91,7 @@ $actions = Array(
         $namespace = $args[0];
         $block = $args[1];
 
-        if (strlen($block) < 2 || !ctype_alpha($block))
+        if (strlen($block) < 2 || !ctype_alnum($block))
         {
             return error(true, "invalid block");
         }
