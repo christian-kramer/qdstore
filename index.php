@@ -100,7 +100,20 @@ $actions = Array(
         $primary = $block[0];
         $secondary = $block[1];
 
-        return file_get_contents(storage($primary) . "/props/?$namespace&$block");
+        $storage = json_decode(file_get_contents(storage($primary) . "/props/?$namespace&$block"), true);
+        if (!$storage || (isset($storage['status']) && $storage['status'] === 'ERROR'))
+        {
+            $storage = json_decode(file_get_contents(storage($secondary) . "/props/?$namespace&$block"), true);
+            if (!$storage)
+            {
+                return error(true, "could not reach servers");
+            }
+            if (isset($storage['status']) && $storage['status'] === 'ERROR')
+            {
+                return error(true, "link could not be found");
+            }
+        }
+        return json_encode($storage);
     }
 );
 
