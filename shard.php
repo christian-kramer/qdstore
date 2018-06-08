@@ -27,6 +27,22 @@ $actions = Array(
         
         return $entities[$entity]();
     },
+    'current' => function ($args)
+    {
+        $namespace = $args[0];
+        $block = $args[1];
+        $subdir = substr($block, 0, 2);
+        $path = "../data/$namespace/$subdir";
+
+        if (!is_dir($path))
+        {
+            return error(true, 'path does not exist');
+        }
+
+        $counter = file_get_contents("$path/counter") ?? 0;
+
+        return $counter;
+    },
     'create' => function ($args)
     {
         
@@ -110,6 +126,12 @@ $actions = Array(
                 
                 if (!$result || $result['status'] === 'ERROR')
                 {
+                    $current = file_get_contents(storage($block[1]) . "/current/?$namespace&$block");
+
+                    if ($current > $counter)
+                    {
+                        /* initiate transfer of records */
+                    }
                     return error(true, $result['response']);
                 }
                 else
@@ -225,9 +247,14 @@ $actions = Array(
         $namespace = $args[0];
         $block = $args[1];
         $subdir = substr($block, 0, 2);
+        $primary = identity() === $block[0];
         $file = json_decode(file_get_contents("../data/$namespace/$subdir/$block"));
         if ($file)
         {
+            if (!$primary)
+            {
+                post_raw(storage($block[0]) . "/create/?$namespace&$block", json_encode(Array('data' => $file->data)));
+            }
             if (!isset($file->reads))
             {
                 $file->reads = 0;
@@ -267,6 +294,10 @@ $actions = Array(
                         }
                     }
                 }
+            }
+            else
+            {
+                post_raw(storage($block[0]) . "/create/?$namespace&$block", json_encode(Array('data' => $file->data)));
             }
 
 
