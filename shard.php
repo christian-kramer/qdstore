@@ -2,7 +2,7 @@
 
 //error_reporting(E_ALL); ini_set('display_errors', 1);
 
-define('ALPHABET', range('a', 'e'));
+define('ALPHABET', range('a', 'z'));
 
 $actions = Array(
     'identify' => function ($args)
@@ -17,7 +17,15 @@ $actions = Array(
                 $self = identity();
                 $counter = file_exists("../counter") ? file_get_contents("../counter") : 0;
                 journal("peer counter is $counter");
-                $peer = PEERS[$counter++ % strlen(PEERS)];
+                while (empty($peer))
+                {
+                    $peer = PEERS[$counter++ % strlen(PEERS)];
+                    if (!file_get_contents(storage($peer) . "/identify/?self"))
+                    {
+                        $peer = '';
+                        sleep(1);
+                    }
+                }
                 file_put_contents("../counter", $counter);
                 return "$self$peer";                
             }
@@ -27,22 +35,6 @@ $actions = Array(
         
         return $entities[$entity]();
     },
-    'current' => function ($args)
-    {
-        $namespace = $args[0];
-        $block = $args[1];
-        $subdir = substr($block, 0, 2);
-        $path = "../data/$namespace/$subdir";
-
-        if (!is_dir($path))
-        {
-            return error(true, 'path does not exist');
-        }
-
-        $counter = file_get_contents("$path/counter") ?? 0;
-
-        return $counter;
-    },
     'create' => function ($args)
     {
         
@@ -51,10 +43,13 @@ $actions = Array(
             return error(true, 'unsupported method or content type');
         }
 
-        
+        $peers = PEERS;
         $namespace = $args[0];
         $block = $args[1];
         $data = file_get_contents("php://input");
+        $primary = identity() === $block[0];
+        $error = '';
+
         $subdir = substr($block, 0, 2);
         $path = "../data/$namespace/$subdir";
 
@@ -62,16 +57,12 @@ $actions = Array(
         {
             mkdir($path, 0755, true);
         }
+        $counter = file_exists("$path/_counter") ? file_get_contents("$path/_counter") : 0;
 
-
-        //$primary = $block[0];
-        //$role = array('secondary', 'primary')[identity() === $primary];
-        $primary = identity() === $block[0];
-
-        $error = '';
         /* handle primary or custom blocks */
         if (strlen($block) > 2)
         {
+            
             if (!$primary)
             {
                 $result = json_decode(post_raw(storage($block[0]) . "/create/?$namespace&$block", $data), true);
@@ -107,12 +98,8 @@ $actions = Array(
         }
 
         /* handle assigned blocks */
-
-        $counter = file_exists("$path/counter") ? file_get_contents("$path/counter") : 0;
-        journal("counter is at $path/counter");
-
         while (strlen($block) === 2)
-        {
+        {        
             journal("block  counter is $counter");
             $suffix = base26($counter++);
             journal("suffix is $suffix");
@@ -126,19 +113,48 @@ $actions = Array(
                 
                 if (!$result || $result['status'] === 'ERROR')
                 {
-                    $current = file_get_contents(storage($block[1]) . "/current/?$namespace&$block");
-
-                    if ($current > $counter)
+                    /* if primary rejected write, retrieve counter from primary */
+                    if ($result && $result['status'] === 'ERROR')
                     {
-                        /* initiate transfer of records */
+                        journal("retrieving foreign from " . storage($block[0]) . "/read/?$namespace&$block" . "_counter");
+                        $foreign = file_get_contents(storage($block[0]) . "/read/?$namespace&$block" . "_counter");
+                        journal("foreign is $foreign and counter is $counter");
+                        
+                        /*   if primary counter > secondary counter, overwrite secondary counter */
+
+                        if ($foreign > $counter)
+                        {
+                            /* initiate transfer of records and overwrite secondary counter */
+                            $counter = $foreign;
+                        }
                     }
-                    return error(true, $result['response']);
+                    else
+                    {
+                        /* pick an unchosen primary */
+                        journal("primary unavailable; picking another");
+                        $peers = str_replace($block[0], '', $peers);
+                        if (empty($peers))
+                        {
+                            return error(true, 'no primaries available');
+                        }
+
+                        $block[0] = $peers[rand(0, strlen($peers) - 1)];
+                        $subdir = $block;
+                        $path = "../data/$namespace/$subdir";
+                        while (!file_exists($path))
+                        {
+                            mkdir($path, 0755, true);
+                        }
+                        $counter = file_exists("$path/_counter") ? file_get_contents("$path/_counter") : 0;
+                    }
                 }
                 else
                 {
+                    $result = file_get_contents(storage($block[0]) . "/update/?$namespace&$block" . "_counter&$counter");
+                    journal("result from counter update was $result");
                     $block .= $suffix;
                     file_put_contents("$path/$block", $data);
-                    file_put_contents("$path/counter", $counter);
+                    file_put_contents("$path/_counter", $counter);
                     return error(false, $block);
                 }
             }
@@ -147,28 +163,49 @@ $actions = Array(
     'update' => function ($args)
     {
 
-        if (!($_SERVER['REQUEST_METHOD'] === 'POST' && $_SERVER['CONTENT_TYPE'] === 'application/json'))
-        {
-            return error(true, 'unsupported method or content type');
-        }
 
         
         $namespace = $args[0];
         $block = $args[1];
-        $data = file_get_contents("php://input");
         $subdir = substr($block, 0, 2);
+        $primary = identity() === $block[0];
+        
+        if ($primary && isset($args[2]) && substr($block, 2, 8) === '_counter')
+        {
+            /* Probably redundant safety check */
+            $counter = $args[2];
+            if (file_exists("../data/$namespace/$subdir/_counter"))
+            {
+                $counter = file_get_contents("../data/$namespace/$subdir/_counter");
+                if ($args[2] > $counter)
+                {
+                    $counter = $args[2];
+                }
+            }
+            file_put_contents("../data/$namespace/$subdir/_counter", $counter);
+            return error(false, "counter updated to $counter");
+        }
+
+        if (!($_SERVER['REQUEST_METHOD'] === 'POST' && $_SERVER['CONTENT_TYPE'] === 'application/json'))
+        {
+            return error(true, 'unsupported method or content type');
+        }
+        
+        $data = file_get_contents("php://input");
         $path = "../data/$namespace/$subdir";
-        $newdata = json_decode(file_get_contents("php://input"));
-        $file = json_decode(file_get_contents("../data/$namespace/$subdir/$block"));
+        $newdata = json_decode($data);
+        $file = file_get_contents("../data/$namespace/$subdir/$block");
+        $olddata = json_decode($file);
 
         while (!file_exists($path))
         {
             mkdir($path, 0755, true);
         }
 
-        $primary = identity() === $block[0];
 
         $error = '';
+
+        journal("block is $block");
         /* handle primary or custom blocks */
         if (!$primary)
         {
@@ -180,57 +217,64 @@ $actions = Array(
             else
             {
                 journal("data with which to overwrite: " . json_encode($newdata));
-                journal("data to overwrite: " . json_encode($file));
+                journal("data to overwrite: " . json_encode($olddata));
 
                 foreach($newdata->data as $key => $value)
                 {
-                    if (isset($file->data->$key) && is_array($file->data->$key))
+                    journal("writing $value to $key");
+                    $olddata->data->$key = $value;
+                    /*
+                    if (isset($olddata->data->$key) && is_array($olddata->data->$key))
                     {
-                        $file->data->$key = array_merge($file->data->$key, $newdata->data->$key);
+                        $olddata->data->$key = array_merge($olddata->data->$key, $newdata->data->$key);
                     }
                     else
                     {
-                        $file->data->$key = $value;
+                        $olddata->data->$key = $value;
                     }
+                    */
                 }
 
 
-                if (!isset($file->writes))
+                if (!isset($olddata->writes))
                 {
-                    $file->writes = 0;
+                    $olddata->writes = 0;
                 }
-                $file->writes++;
-                file_put_contents("../data/$namespace/$subdir/$block", json_encode($file));
-                journal("this is what we return to qdstore: " . json_encode($file->data));
-                return json_encode($file->data);
+                $olddata->writes++;
+                file_put_contents("../data/$namespace/$subdir/$block", json_encode($olddata));
+                journal("this is what we return to qdstore: " . json_encode($olddata->data));
+                return json_encode($olddata->data);
             }
         }
         else
         {
             journal("data with which to overwrite: " . json_encode($newdata));
-            journal("data to overwrite: " . json_encode($file));
+            journal("data to overwrite: " . json_encode($olddata));
 
             foreach($newdata->data as $key => $value)
             {
-                if (isset($file->data->$key) && is_array($file->data->$key))
+                $olddata->data->$key = $value;
+                /*
+                if (isset($olddata->data->$key) && is_array($olddata->data->$key))
                 {
-                    $file->data->$key = array_merge($file->data->$key, $newdata->data->$key);
+                    $olddata->data->$key = array_merge($olddata->data->$key, $newdata->data->$key);
                 }
                 else
                 {
-                    $file->data->$key = $value;
+                    $olddata->data->$key = $value;
                 }
+                */
             }
 
 
-            if (!isset($file->writes))
+            if (!isset($olddata->writes))
             {
-                $file->writes = 0;
+                $olddata->writes = 0;
             }
-            $file->writes++;
-            file_put_contents("../data/$namespace/$subdir/$block", json_encode($file));
-            journal("this is what we return to secondary: " . json_encode($file->data));
-            return json_encode($file->data);
+            $olddata->writes++;
+            file_put_contents("../data/$namespace/$subdir/$block", json_encode($olddata));
+            journal("this is what we return to secondary: " . json_encode($olddata->data));
+            return json_encode($olddata->data);
         }
         
         if ($error)
@@ -248,13 +292,27 @@ $actions = Array(
         $block = $args[1];
         $subdir = substr($block, 0, 2);
         $primary = identity() === $block[0];
+
+        if ($primary && substr($block, 2, 8) === '_counter')
+        {
+            $counter = 0;
+            if (file_exists("../data/$namespace/$subdir/_counter"))
+            {
+                $counter = file_get_contents("../data/$namespace/$subdir/_counter");
+            }
+            return $counter;                
+        }
+
+
         $file = json_decode(file_get_contents("../data/$namespace/$subdir/$block"));
         if ($file)
         {
+            /*
             if (!$primary)
             {
                 post_raw(storage($block[0]) . "/create/?$namespace&$block", json_encode(Array('data' => $file->data)));
             }
+            */
             if (!isset($file->reads))
             {
                 $file->reads = 0;
@@ -295,10 +353,12 @@ $actions = Array(
                     }
                 }
             }
+            /*
             else
             {
                 post_raw(storage($block[0]) . "/create/?$namespace&$block", json_encode(Array('data' => $file->data)));
             }
+            */
 
 
             return json_encode($file);
