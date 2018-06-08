@@ -2,7 +2,7 @@
 
 //error_reporting(E_ALL); ini_set('display_errors', 1);
 
-define('ALPHABET', range('a', 'e'));
+define('ALPHABET', range('a', 'z'));
 
 
 $actions = Array(
@@ -11,6 +11,7 @@ $actions = Array(
         $primary = ALPHABET[rand(0, count(ALPHABET) - 1)];
         journal("selected $primary as primary");
         return file_get_contents(storage($primary) . "/identify/?group");
+        //return 'ab';
     },
     'create' => function ($args)
     {
@@ -81,7 +82,7 @@ $actions = Array(
             }
             if (isset($storage['status']) && $storage['status'] === 'ERROR')
             {
-                return error(true, "link could not be found");
+                return error(true, "resource could not be found");
             }
         }
         return json_encode($storage);
