@@ -71,18 +71,15 @@ $actions = Array(
         $primary = $block[0];
         $secondary = $block[1];
 
-
+        /* Attempt to read from Primary */
         $storage = json_decode(file_get_contents(storage($primary) . "/read/?$namespace&$block"), true);
-        if (!$storage || (isset($storage['status']) && $storage['status'] === 'ERROR'))
+        if (!$storage)
         {
+            /* Primary unavailable, divert to secondary */
             $storage = json_decode(file_get_contents(storage($secondary) . "/read/?$namespace&$block"), true);
             if (!$storage)
             {
                 return error(true, "could not reach servers");
-            }
-            if (isset($storage['status']) && $storage['status'] === 'ERROR')
-            {
-                return error(true, "resource could not be found");
             }
         }
         return json_encode($storage);
