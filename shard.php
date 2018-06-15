@@ -4,6 +4,81 @@
 
 define('ALPHABET', range('a', 'z'));
 
+class File
+{
+    private $path;
+    private $block;
+    public $props;
+    private $namespace;
+
+    function __construct($namespace, $block, $load = true)
+    {
+        $this->namespace = $namespace;
+        $this->block = $block;
+
+        if ($load)
+        {
+            $this->load($block);
+        }
+    }
+
+    function subdir($block)
+    {
+        $subdir = substr($block, 0, 2);
+        return "../data/$this->namespace/$subdir";
+
+    }
+
+    function exists($block = null)
+    {
+        $block = $block ?? $this->block;
+        $path = $this->subdir($block);
+        return file_exists("$path/$block");
+    }
+
+    function load($block = null)
+    {
+        $block = $block ?? $this->block;
+        $path = $this->subdir($block);
+
+        if ($this->exists($block))
+        {
+            $this->props = json_decode(file_get_contents("$path/$block"), true);
+        }
+        else
+        {
+            while (!file_exists($path))
+            {
+                mkdir($path, 0755, true);
+            }
+
+            $this->props = array('data' => null, 'writes' => 0, 'reads' => 0);
+        }
+
+        $this->path = $path;
+        $this->block = $block;
+    }
+
+    function read()
+    {
+        if (!empty($this->props['data']))
+        {
+            $this->props['reads']++;
+            file_put_contents("$this->path/$this->block", json_encode($this->props));
+        }
+    
+        return $this->props['data'];
+    }
+
+    function write($data)
+    {
+        $this->props['data'] = json_decode($data);
+        $this->props['writes']++;
+
+        file_put_contents("$this->path/$this->block", json_encode($this->props));
+    }
+}
+
 $actions = Array(
     'identify' => function ($args)
     {
@@ -36,6 +111,118 @@ $actions = Array(
         return $entities[$entity]();
     },
     'create' => function ($args)
+    {
+        journal('entering create');
+        $data = posted_json();
+
+        if (!$data)
+        {
+            return error(true, 'unsupported method or content type');
+        }
+
+        journal("data is $data");
+
+        $peers = PEERS;
+        $namespace = $args[0];
+        $block = $args[1];
+        $primary = identity() === $block[0];
+        $error = '';
+        $counter = file_get_counter($namespace, $block);
+
+
+        /* handle primary or custom blocks */
+        if (strlen($block) > 2)
+        {
+            $file = new File($namespace, $block);
+            
+            if (!$primary)
+            {
+                $result = json_decode(post_raw(storage($block[0]) . "/create/?$namespace&$block", $data), true);
+                if (!$result || $result['status'] === 'ERROR')
+                {
+                    $error = $result['response'];
+                }
+            }
+            else
+            {
+                if ($file->exists())
+                {
+                    $error = "block exists";
+                }
+            }
+            
+            if ($error)
+            {
+                return error(true, $error);
+            }
+            else
+            {
+                $file->write($data);
+                return error(false, $block);
+            }
+        }
+        
+        /* handle assigned blocks */
+        $file = new File($namespace, $block, false);
+
+        while (strlen($block) === 2)
+        {
+            journal("block is $block");
+            journal("counter is $counter");
+            $suffix = base26($counter++);
+            journal("suffix is $suffix");
+            if (!$file->exists("$block$suffix"))
+            {
+                journal("primary is $block[0], storage is " . storage($block[0]) . "/create/?$namespace&$block$suffix");
+                
+                $result = json_decode(post_raw(storage($block[0]) . "/create/?$namespace&$block$suffix", $data), true);
+                journal("result status is " . $result['status']);
+                
+                if (!$result || $result['status'] === 'ERROR')
+                {
+                    /* if primary rejected write, retrieve counter from primary */
+                    if ($result && $result['status'] === 'ERROR')
+                    {
+                        journal("retrieving foreign from " . storage($block[0]) . "/read/?$namespace&$block" . "_counter");
+                        $foreign = file_get_contents(storage($block[0]) . "/read/?$namespace&$block" . "_counter");
+                        journal("foreign is $foreign and counter is $counter");
+                        
+                        /*   if primary counter > secondary counter, overwrite secondary counter */
+
+                        if ($foreign > $counter)
+                        {
+                            /* initiate transfer of records and overwrite secondary counter */
+                            $counter = $foreign;
+                        }
+                    }
+                    else
+                    {
+                        /* pick an unchosen primary */
+                        journal("primary unavailable; picking another");
+                        $peers = str_replace($block[0], '', $peers);
+                        if (empty($peers))
+                        {
+                            return error(true, 'no primaries available');
+                        }
+
+                        $block[0] = $peers[rand(0, strlen($peers) - 1)];
+                        $counter = file_get_counter($namespace, $block);
+                    }
+                }
+                else
+                {
+                    $result = file_get_contents(storage($block[0]) . "/update/?$namespace&$block" . "_counter&$counter");
+                    journal("result from counter update was $result");
+                    $block .= $suffix;
+                    $file->load($block);
+                    $file->write($data);
+                    file_put_counter($namespace, $block, $counter);
+                    return error(false, $block);
+                }
+            }
+        }
+    },
+    'create2' => function ($args)
     {
         
         if (!($_SERVER['REQUEST_METHOD'] === 'POST' && $_SERVER['CONTENT_TYPE'] === 'application/json'))
@@ -155,16 +342,43 @@ $actions = Array(
                     $block .= $suffix;
                     file_put_contents("$path/$block", $data);
                     file_put_contents("$path/_counter", $counter);
-                    return error(false, $block);
                 }
             }
         }
     },
     'update' => function ($args)
     {
-
-
+        $namespace = $args[0];
+        $block = $args[1];
+        $primary = identity() === $block[0];
         
+        if ($primary && isset($args[2]) && substr($block, 2, 8) === '_counter')
+        {
+            return file_put_counter($namespace, $block, $args[2]);
+        }
+
+        $data = posted_json();
+
+        if (!$data)
+        {
+            return error(true, 'unsupported method or content type');
+        }
+
+        if (!$primary)
+        {
+            $result = json_decode(post_raw(storage($block[0]) . "/update/?$namespace&$block", $data), true);
+            if (!$result || $result['status'] === 'ERROR')
+            {
+                return json_encode($result);
+            }
+        }
+
+        $file = new File($namespace, $block);
+        $file->write($data);
+        return $data;
+    },
+    'update2' => function ($args)
+    {
         $namespace = $args[0];
         $block = $args[1];
         $subdir = substr($block, 0, 2);
@@ -290,41 +504,48 @@ $actions = Array(
     {   /* Retrieve Data property of specified file, and increment read counter */
         $namespace = $args[0];
         $block = $args[1];
-        $subdir = substr($block, 0, 2);
         $primary = identity() === $block[0];
 
         if ($primary && substr($block, 2, 8) === '_counter')
         {
-            $counter = 0;
-            if (file_exists("../data/$namespace/$subdir/_counter"))
-            {
-                $counter = file_get_contents("../data/$namespace/$subdir/_counter");
-            }
-            return $counter;                
+            return file_get_counter($namespace, $block);
         }
 
 
-        $file = json_decode(file_get_contents("../data/$namespace/$subdir/$block"));
-        if ($file)
+        $file = new File($namespace, $block);
+        if ($file->exists())
         {
-            /*
-            if (!$primary)
+            /* file is available locally */
+            if ($primary)
             {
-                post_raw(storage($block[0]) . "/create/?$namespace&$block", json_encode(Array('data' => $file->data)));
+                /* normal situation, replicate to secondary if appropriate */
+                return json_encode($file->read());
             }
-            */
-            if (!isset($file->reads))
+            else
             {
-                $file->reads = 0;
+                /* primary unavailable or routine replication check */
+                return json_encode($file->read());
             }
-            $file->reads++;
-            file_put_contents("../data/$namespace/$subdir/$block", json_encode($file));
-            return json_encode($file->data);
+        }
+        else
+        {
+            /* file is not available locally */
+            if ($primary)
+            {
+                /* failure situation, read from secondary */
+                $storage = json_decode(file_get_contents(storage($block[1]) . "/read/?$namespace&$block"), true);
+                if ($storage)
+                {
+                    if (!isset($storage['status']))
+                    {
+                        
+                    }
+                    return json_encode($storage);
+                }
+            }
         }
 
         return error(true, 'error retrieving file');
-
-
     },
     'props' => function ($args)
     {   /* Retrieve all other properties of specified file, without incrementing read counter */
@@ -332,8 +553,9 @@ $actions = Array(
         $block = $args[1];
         $primary = identity() === $block[0];
         $subdir = substr($block, 0, 2);
-        $file = json_decode(file_get_contents("../data/$namespace/$subdir/$block"), true);
-        if ($file)
+        $file = new File($namespace, $block);
+        //$file = json_decode(file_get_contents("../data/$namespace/$subdir/$block"), true);
+        if ($file->exists())
         {
             //unset($file['data']);
             
@@ -348,7 +570,7 @@ $actions = Array(
                     {
                         if (is_numeric($value))
                         {
-                            $file[$key] += $value;
+                            $file->props[$key] += $value;
                         }
                     }
                 }
@@ -361,7 +583,7 @@ $actions = Array(
             */
 
 
-            return json_encode($file);
+            return json_encode($file->props);
         }
 
         return error(true, 'error retrieving file');
@@ -493,6 +715,109 @@ function storage($shard)
 {
     return "http://" . $_SERVER['HTTP_HOST'] . "/shards/$shard";
 }
+
+function posted_json()
+{
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && $_SERVER['CONTENT_TYPE'] === 'application/json')
+    {
+        return file_get_contents("php://input");
+    }
+}
+
+function file_put_counter($namespace, $block, $value = 0)
+{
+    $subdir = substr($block, 0, 2);
+    $path = "../data/$namespace/$subdir";
+    if (file_exists("$path/_counter"))
+    {
+        $counter = file_get_contents("$path/_counter");
+    }
+    if ($value > ($counter ?? 0))
+    {
+        file_put_contents("$path/_counter", $value);
+    }
+    return error(false, "counter updated to $counter");
+}
+
+function file_get_counter($namespace, $block)
+{
+    $subdir = substr($block, 0, 2);
+    $path = "../data/$namespace/$subdir";
+    return file_exists("$path/_counter") ? file_get_contents("$path/_counter") : 0;
+}
+
+/*
+function file_put_data($namespace, $block, $newdata)
+{
+    $data = json_decode($newdata);
+    $file = json_decode(file_get_props($namespace, $block), true);
+
+    if ($file)
+    {
+        // Update
+        foreach($data as $key => $value)
+        {
+            $file['data'][$key] = $value;
+        }
+
+        $file->writes++;
+    }
+    else
+    {
+        // Create
+        $file = array('data' => $data, 'writes' => 1);
+    }
+    return file_put_props($namespace, $block, $file);
+}
+*/
+
+/*
+function file_get_data($namespace, $block)
+{
+    $file = json_decode(file_get_props($namespace, $block));
+    if ($file)
+    {
+        $reads = isset($file->reads) ? $file->reads : 0;
+        $reads++;
+        file_put_props($namespace, $block, array('reads' => $reads));
+    
+        return json_encode($file->data);
+    }
+}
+*/
+
+/*
+function file_get_props($namespace, $block)
+{
+    $subdir = substr($block, 0, 2);
+    $path = "../data/$namespace/$subdir";
+
+    if (file_exists("$path/$block"))
+    {
+        return file_get_contents("$path/$block");
+    }
+}
+
+function file_put_props($namespace, $block, $props)
+{
+    $subdir = substr($block, 0, 2);
+    $path = "../data/$namespace/$subdir";
+
+    while (!file_exists($path))
+    {
+        mkdir($path, 0755, true);
+    }
+
+    $file = json_decode(file_get_contents("$path/$block"));
+
+    foreach($props as $key => $value)
+    {
+        $file->$key = $value;
+    }
+    
+    return file_put_contents("$path/$block", json_encode($file));
+}
+*/
 
 function journal($msg)
 {
