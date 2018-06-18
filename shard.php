@@ -350,6 +350,7 @@ $actions = Array(
     {
         $namespace = $args[0];
         $block = $args[1];
+        $replica = $args[2];
         $primary = identity() === $block[0];
         
         if ($primary && isset($args[2]) && substr($block, 2, 8) === '_counter')
@@ -364,7 +365,7 @@ $actions = Array(
             return error(true, 'unsupported method or content type');
         }
 
-        if (!$primary)
+        if (!$primary && !$replica)
         {
             $result = json_decode(post_raw(storage($block[0]) . "/update/?$namespace&$block", $data), true);
             if (!$result || $result['status'] === 'ERROR')
@@ -510,21 +511,51 @@ $actions = Array(
         {
             return file_get_counter($namespace, $block);
         }
+        journal("reading from $block");
 
 
         $file = new File($namespace, $block);
         if ($file->exists())
         {
             /* file is available locally */
+            $data = $file->read();
             if ($primary)
             {
                 /* normal situation, replicate to secondary if appropriate */
-                return json_encode($file->read());
+                if (!($file->props['reads'] % 2))
+                {
+                    journal("attempting to replicate $block to " . storage($block[1]) . "/create/?$namespace&$block");
+
+                    /* attempt to read file from secondary */
+                    $foreign = json_decode(file_get_contents(storage($block[1]) . "/props/?$namespace&$block"), true);
+                    if ($foreign)
+                    {
+                        if (isset($foreign['status']) && $foreign['status'] === 'ERROR')
+                        {
+                            /* write primary's copy to secondary */
+                            $result = json_decode(post_raw(storage($block[1]) . "/update/?$namespace&$block&as_replica", json_encode($data)), true);
+                            if ($result && $result['status'] === 'ERROR')
+                            {
+                                journal("write to secondary failed with " . json_encode($result));
+                            }
+                            else
+                            {
+                                journal("replicated primary to secondary");
+                            }
+                        }
+                        else
+                        {
+                            /* assume secondary is gospel and overwrite primary */
+                            $file->write(json_encode($foreign['data']));
+                        }
+                    }
+                }
+                return json_encode($data);
             }
             else
             {
                 /* primary unavailable or routine replication check */
-                return json_encode($file->read());
+                return json_encode($data);
             }
         }
         else
@@ -533,13 +564,18 @@ $actions = Array(
             if ($primary)
             {
                 /* failure situation, read from secondary */
-                $storage = json_decode(file_get_contents(storage($block[1]) . "/read/?$namespace&$block"), true);
+                journal("getting here and reading secondary");
+                $storage = json_decode(file_get_contents(storage($block[1]) . "/props/?$namespace&$block"), true);
                 if ($storage)
                 {
                     if (!isset($storage['status']))
                     {
-                        
+                        $data = json_encode($storage['data']);
+                        $file->write($data);
+                        return $data;
                     }
+
+                    journal("error condition, storage is " . json_encode($storage));
                     return json_encode($storage);
                 }
             }
