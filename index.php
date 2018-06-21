@@ -3,7 +3,7 @@
 //error_reporting(E_ALL); ini_set('display_errors', 1);
 
 define('ALPHABET', range('a', 'z'));
-
+define('MULTI_SERVER', true);
 
 $actions = Array(
     'group' => function ($args)
@@ -160,7 +160,7 @@ function build($path, $actions)
 
 function init($path)
 {
-    if (!file_exists("$path"))
+    if (!file_exists("$path") && !MULTI_SERVER)
     {
         foreach(ALPHABET as $identity)
         {
@@ -225,6 +225,10 @@ function route($request, $actions)
 
 function storage($shard)
 {
+    if (MULTI_SERVER)
+    {
+        return "$shard." . $_SERVER['HTTP_HOST'];
+    }
     return "http://" . $_SERVER['HTTP_HOST'] . "/shards/$shard";
 }
 

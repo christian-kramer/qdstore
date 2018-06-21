@@ -744,12 +744,30 @@ function post_raw($url, $data)
 
 function identity()
 {
+    if (is_server())
+    {
+        return array_shift(explode('.', $_SERVER['HTTP_HOST']));
+    }
+    
     return basename(dirname('../' . dirname($_SERVER['SCRIPT_NAME'])));
 }
 
 function storage($shard)
 {
+    if (is_server())
+    {
+        $build = explode('.', $_SERVER['HTTP_HOST']);
+        array_shift($build);
+        array_unshift($build, $shard);
+        return "http://" . implode('.', $build);
+    }
+
     return "http://" . $_SERVER['HTTP_HOST'] . "/shards/$shard";
+}
+
+function is_server()
+{
+    return (ctype_alpha($_SERVER['HTTP_HOST'][0]) && strlen(explode($_SERVER['HTTP_HOST'], '.')[0]) == 1);
 }
 
 function posted_json()
