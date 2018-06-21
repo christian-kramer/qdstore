@@ -3,7 +3,7 @@
 //error_reporting(E_ALL); ini_set('display_errors', 1);
 
 define('ALPHABET', range('a', 'z'));
-define('MULTI_SERVER', true);
+define('MULTI_SERVER', false);
 
 $actions = Array(
     'group' => function ($args)
@@ -173,6 +173,14 @@ function init($path)
         }
         
         file_put_contents("$path/.gitignore", "*\n");
+    }
+
+    if (MULTI_SERVER)
+    {
+        foreach(ALPHABET as $identity)
+        {
+            file_get_contents(storage($identity));
+        }
     }
 }
 
