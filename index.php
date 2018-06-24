@@ -3,7 +3,7 @@
 //error_reporting(E_ALL); ini_set('display_errors', 1);
 
 define('ALPHABET', range('a', 'z'));
-define('MULTI_SERVER', false);
+define("MULTI_SERVER", false);
 
 $actions = Array(
     'group' => function ($args)
