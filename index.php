@@ -235,7 +235,7 @@ function storage($shard)
 {
     if (MULTI_SERVER)
     {
-        return "$shard." . $_SERVER['HTTP_HOST'];
+        return "http://$shard." . preg_replace('/[0-9]+/', '', $_SERVER['HTTP_HOST']);
     }
     return "http://" . $_SERVER['HTTP_HOST'] . "/shards/$shard";
 }
