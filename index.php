@@ -4,6 +4,7 @@
 
 define('ALPHABET', range('a', 'z'));
 define("MULTI_SERVER", false);
+ini_set('default_socket_timeout', 5);
 
 $actions = Array(
     'group' => function ($args)

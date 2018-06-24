@@ -3,6 +3,7 @@
 //error_reporting(E_ALL); ini_set('display_errors', 1);
 
 define('ALPHABET', range('a', 'z'));
+ini_set('default_socket_timeout', 5);
 
 class File
 {
